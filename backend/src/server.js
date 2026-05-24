@@ -105,6 +105,30 @@ function validateMovieInput(body, partial = false) {
   return { errors, values: { title, rating, year } };
 }
 
+function uniqueIds(values) {
+  if (!Array.isArray(values)) return [];
+
+  return [...new Set(values.map(toInt).filter(Number.isInteger))];
+}
+
+function normalizeActorLinks(values) {
+  if (!Array.isArray(values)) return [];
+
+  const links = [];
+  const seen = new Set();
+
+  values.forEach((item) => {
+    const pid = toInt(item?.pid);
+    const roleName = typeof item?.role_name === 'string' ? item.role_name.trim() : '';
+
+    if (!Number.isInteger(pid) || !roleName || seen.has(pid)) return;
+    seen.add(pid);
+    links.push({ pid, role_name: roleName });
+  });
+
+  return links;
+}
+
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'movies-platform-backend' });
 });
@@ -163,16 +187,36 @@ app.get('/api/movies/:mid', (req, res) => {
 
 app.post('/api/movies', (req, res) => {
   const { errors, values } = validateMovieInput(req.body);
+  const directorIds = uniqueIds(req.body.director_ids);
+  const actorLinks = normalizeActorLinks(req.body.actors);
+
+  directorIds.forEach((pid) => {
+    if (!personById(pid)) errors.push('One selected director does not exist.');
+  });
+
+  actorLinks.forEach((actor) => {
+    if (!personById(actor.pid)) errors.push('One selected actor does not exist.');
+  });
+
   if (errors.length) return res.status(400).json({ message: errors.join(' ') });
 
   const movie = {
     mid: nextId(db.movies, 'mid'),
     title: values.title,
     rating: values.rating,
-    year: values.year
+    year: values.year,
+    poster_url: typeof req.body.poster_url === 'string' ? req.body.poster_url.trim() : '',
+    backdrop_url: typeof req.body.backdrop_url === 'string' ? req.body.backdrop_url.trim() : ''
   };
 
   db.movies.push(movie);
+  directorIds.forEach((pid) => {
+    db.directs.push({ pid, mid: movie.mid });
+  });
+  actorLinks.forEach((actor) => {
+    db.acts.push({ pid: actor.pid, mid: movie.mid, role_name: actor.role_name });
+  });
+
   return res.status(201).json(enrichMovie(movie));
 });
 
